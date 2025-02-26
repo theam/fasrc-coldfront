@@ -1,0 +1,271 @@
+services:
+  ldap:
+    # image: ubccr/hpcts:ldap-${HPCTS_VERSION}
+    build:
+      context: ./ldap
+    hostname: ldap
+    container_name: ldap-custom
+    environment:
+      - CONTAINER_LOG_LEVEL=debug
+      - LDAP_RFC2307BIS_SCHEMA=true
+      - LDAP_REMOVE_CONFIG_AFTER_SETUP=false
+      - LDAP_TLS_VERIFY_CLIENT=never
+    networks:
+      - compute
+
+  base:
+    image: ubccr/hpcts:base-${HPCTS_VERSION}
+    # build:
+    #  context: ./base
+    networks:
+      - compute
+    depends_on:
+      - ldap
+
+  mongodb:
+    image: mongo:${MONGODB_VERSION}
+    hostname: mongodb
+    container_name: mongodb-custom
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=hBbeOfpFLfFT5ZO
+    networks:
+      - compute
+    volumes:
+      - ./mongodb:/docker-entrypoint-initdb.d
+      - data_db:/data/db
+    expose:
+      - "27017"
+
+  slurmdbd:
+    image: ubccr/hpcts:slurm-${HPCTS_VERSION}
+    build:
+      context: ./slurm
+      args:
+        SLURM_VERSION: $SLURM_VERSION
+        HPCTS_VERSION: $HPCTS_VERSION
+    command: ["slurmdbd"]
+    container_name: slurmdbd-custom
+    hostname: slurmdbd
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - slurmdbd_state:/var/lib/slurmd
+      - bin_slurm:/usr/bin
+      - sss_lib:/var/lib/sss
+      - etc_sssd:/etc/sssd
+      - lib64:/usr/lib64
+#      - var_munge:/var/run/munge
+      - run_munge:/run/munge
+    expose:
+      - "22"
+      - "6819"
+    depends_on:
+      - base
+      - ldap
+      - mysql
+
+  slurmctld:
+    image: ubccr/hpcts:slurm-${HPCTS_VERSION}
+    command: ["slurmctld"]
+    container_name: slurmctld-custom
+    hostname: slurmctld
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+      - slurmctld_state:/var/lib/slurmd
+      - bin_slurm:/usr/bin
+      - sss_lib:/var/lib/sss
+      - etc_sssd:/etc/sssd
+      - lib64:/usr/lib64
+      - var_munge:/var/run/munge
+      - run_munge:/run/munge
+    expose:
+      - "22"
+      - "6817"
+    depends_on:
+      - ldap
+      - slurmdbd
+
+  cpn01:
+    init: true
+    image: ubccr/hpcts:slurm-${HPCTS_VERSION}
+    command: ["slurmd"]
+    hostname: cpn01
+    container_name: cpn01-custom
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+      - cpn01_slurmd_state:/var/lib/slurmd
+    expose:
+      - "22"
+      - "6818"
+    depends_on:
+      - ldap
+      - slurmctld
+
+  cpn02:
+    init: true
+    image: ubccr/hpcts:slurm-${HPCTS_VERSION}
+    command: ["slurmd"]
+    hostname: cpn02
+    container_name: cpn02-custom
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+      - cpn02_slurmd_state:/var/lib/slurmd
+    expose:
+      - "22"
+      - "6818"
+    depends_on:
+      - ldap
+      - slurmctld
+
+  frontend:
+    image: agilemonkeys-frontend #ubccr/hpcts:slurm-${HPCTS_VERSION}
+    command: ["frontend"]
+    hostname: frontend
+    container_name: frontend-custom
+    build:
+      context: ./slurm
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+    ports:
+      - "127.0.0.1:6223:22"
+    depends_on:
+      - ldap
+      - slurmctld
+
+  mysql:
+    image: mariadb:${MARIADB_VERSION}
+    hostname: mysql
+    container_name: mysql-custom
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    networks:
+      - compute
+    volumes:
+      - ./database:/docker-entrypoint-initdb.d
+      - ./database:/etc/mysql/conf.d
+      - ./slurm/slurmdbd.conf:/etc/slurm/slurmdbd.conf
+      - var_lib_mysql:/var/lib/mysql
+    expose:
+      - "3306"
+
+  coldfront:
+    image: coldfront-test:latest
+    hostname: coldfront
+    container_name: coldfront-test-hpc
+    depends_on:
+      - ldap
+      - mysql
+      - frontend
+    build:
+      context: ../
+    environment:
+      - PLUGIN_IFX=True
+      - PLUGIN_SLURM=True
+      - PLUGIN_XDMOD=True
+      - build_env=dev
+    expose:
+      - "22"
+    ports:
+      - "127.0.0.1:2444:80"
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - run_munge:/run/munge
+      - home:/home
+      - srv_www:/srv/www
+      - ../coldfront:/usr/src/app/
+    networks:
+      - compute
+
+  ondemand:
+    image: ubccr/hpcts:ondemand-${HPCTS_VERSION}
+    # build:
+    #   context: ./ondemand
+    #  args:
+    #    HPCTS_VERSION: $HPCTS_VERSION
+    command: ["serve"]
+    hostname: ondemand
+    container_name: ondemand-custom
+    networks:
+      - compute
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+    expose:
+      - "22"
+    ports:
+      - "127.0.0.1:3444:3443"
+      - "127.0.0.1:5555:5554"
+    depends_on:
+      - ldap
+      - frontend
+
+  xdmod:
+    image: ubccr/hpcts:xdmod-${HPCTS_VERSION}
+    build:
+      context: ./xdmod
+      args:
+        HPCTS_VERSION: $HPCTS_VERSION
+    command: ["serve"]
+    hostname: xdmod
+    container_name: xdmod-custom
+    networks:
+      - compute
+    volumes:
+      - etc_xdmod:/etc/xdmod
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - home:/home
+      - ./xdmod:/xdmod
+    expose:
+      - "22"
+    ports:
+      - "127.0.0.1:4444:443"
+    depends_on:
+      - mongodb
+      - ldap
+      - mysql
+      - frontend
+
+volumes:
+  etc_xdmod:
+  etc_munge:
+  etc_slurm:
+  bin_slurm:
+  home:
+  var_lib_mysql:
+  cpn01_slurmd_state:
+  cpn02_slurmd_state:
+  slurmctld_state:
+  slurmdbd_state:
+  data_db:
+  srv_www:
+  coldfront-data:
+  sss_lib:
+  etc_sssd:
+  lib64:
+  var_munge:
+  run_munge:
+
+networks:
+  compute:
